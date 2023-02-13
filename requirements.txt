@@ -2,4 +2,5 @@ gradio
 google-cloud-bigquery[pandas]
 uvicorn
 fastapi
-debugpy
+plotly
+numpy

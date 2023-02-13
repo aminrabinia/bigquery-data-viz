@@ -1,12 +1,12 @@
+
 import uvicorn
-import numpy as np
 import gradio as gr
+import numpy as np
+import plotly.express as px
 from google.cloud import bigquery
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-
-client = bigquery.Client.from_service_account_json("jsonkey.json")
 
 app = FastAPI()
 
@@ -17,54 +17,77 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.get('/')
 def root():
-    return {"message": "hello!"}
+    return {"message": "hello from data viz!"}
 
+client = bigquery.Client.from_service_account_json("jsonkey.json")
 
-
-QUERY = (
-    "SELECT on_street_name as street, contributing_factor_vehicle_1 as cause, unique_key, vehicle_type_code1 as vehicle, timestamp "
-    "FROM `data-science-proj-376319.nypd_motor_vehicle_collisions.nypd_mv_collisions` " 
-    "where timestamp between '2021-01-01' and '2022-01-01'  "
-    "LIMIT 10")
+QUERY_base = (" FROM `data-science-proj-376319.nypd_motor_vehicle_collisions.nypd_mv_collisions` " 
+    " WHERE timestamp between '2021-01-01' and '2022-01-01' ")
 
 def run_query():
-    query_job = client.query(QUERY)  
-    # print('job: ', query_job)
-    query_result = query_job.result()  
-    # print('results: ', query_result)
-    df = query_result.to_dataframe()
-    # print('df: ', df)
-    # Select a subset of columns 
-    df = df[["unique_key", "vehicle", "cause", "street", "timestamp"]]
-    # Convert numeric columns to standard numpy types
-    df = df.astype({"unique_key": np.int64})
-    return df
+    QUERY = "SELECT on_street_name as street, contributing_factor_vehicle_1 as cause, unique_key, vehicle_type_code1 as vehicle, timestamp " \
+        + QUERY_base + " LIMIT 10 "
 
-QUERY2 = (
-    "SELECT count(unique_key) as collisions, extract(month FROM timestamp) as month "
-    "FROM `data-science-proj-376319.nypd_motor_vehicle_collisions.nypd_mv_collisions` " 
-    "where timestamp between '2021-01-01' and '2022-01-01' group by month order by month")
+    query_job = client.query(QUERY)  
+    query_result = query_job.result()  
+    df = query_result.to_dataframe()
+
+    df = df[["unique_key", "vehicle", "cause", "street", "timestamp"]] # Select a subset of columns 
+    df = df.astype({"unique_key": np.int64}) # Convert numeric columns to standard numpy types
+    return df
 
 def run_query2():
-    query_job = client.query(QUERY2)  
+    QUERY = "SELECT count(unique_key) as collisions, contributing_factor_vehicle_1 as cause, extract(month FROM timestamp) as month " \
+        + QUERY_base + " GROUP BY month, cause ORDER BY month"
+
+    query_job = client.query(QUERY)  
     query_result = query_job.result()  
     df = query_result.to_dataframe()
-    # Select a subset of columns 
-    df = df[["collisions", "month"]]
-    # Convert numeric columns to standard numpy types
-    df = df.astype({"collisions": np.int64, "month": np.int64})
+    
+    df = df[["collisions", "month", "cause"]] # Select a subset of columns 
+    df = df.astype({"collisions": np.int64, "month": np.int64}) # Convert numeric columns to standard numpy types
     return df
 
 
+async def show_chart(causes):
 
-with gr.Blocks(css="footer {visibility: hidden}") as demo:
+    df = run_query2()
+    # Filter the data by "cause"
+    df = df[df.cause.isin(causes)]
+
+    fig = px.line(df, x="month", y='collisions', color='cause')
+    fig.update_layout(
+    title="Colisions ",
+    xaxis_title="Month",
+    yaxis_title="Number of Collisions")
+    return fig
+
+
+inputs = [gr.CheckboxGroup(
+                ["Alcohol Involvement", "Backing Unsafely", "Driver Inattention/Distraction", "Fell Asleep", 
+                 "Following Too Closely", "Steering Failure", "Traffic Control Disregarded", "Unsafe Speed"], 
+                label="Cause", 
+                value=["Alcohol Involvement", "Backing Unsafely"]),]
+outputs = gr.Plot()
+
+with gr.Blocks(css="footer {visibility: hidden}") as chart_demo:
+    gr.Markdown("# NYPD Collisions Dataset")
+    with gr.Row():
+        gr.Interface(
+            fn=show_chart,
+            inputs=inputs,
+            outputs=outputs,
+            allow_flagging='never', 
+            live = False)
+
+with gr.Blocks(css="footer {visibility: hidden}") as table_demo:
     gr.Markdown("# NYPD Collisions Dataset")
     with gr.Row():
         gr.DataFrame(run_query, max_rows=10, overflow_row_behaviour='paginate')
-        gr.LinePlot(run_query2, x="month", y="collisions", width=500, height=500)
+
+demo = gr.TabbedInterface([chart_demo, table_demo],["Chart", "Table"], css="footer {visibility: hidden}")
 
 gr.mount_gradio_app(app, demo, path="/gradio")
 
